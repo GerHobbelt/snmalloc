@@ -354,7 +354,7 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
 
   endfunction()
 
-  set(SHIM_FILES src/snmalloc/override/new.cc)
+  set(SHIM_FILES src/snmalloc/override/new.cc src/snmalloc/override/announce_configuration.cc)
   set(SHIM_FILES_MEMCPY src/snmalloc/override/memcpy.cc)
 
   if (SNMALLOC_STATIC_LIBRARY)
