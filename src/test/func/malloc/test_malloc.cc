@@ -16,8 +16,9 @@ void check_result(size_t size, size_t align, void* p, int err, bool null)
   bool failed = false;
   if (errno != err && err != SUCCESS)
   {
+    // Note: successful calls are allowed to spuriously set errno
     printf("Expected error: %d but got %d\n", err, errno);
-    failed = true;
+    abort();
   }
 
   if (null)
@@ -59,6 +60,24 @@ void check_result(size_t size, size_t align, void* p, int err, bool null)
     printf(
       "Cheri size is %zu, but required to be %zu.\n", cheri_size, alloc_size);
     failed = true;
+  }
+  if (p != nullptr)
+  {
+    /*
+     * Scan the allocation for any tagged capabilities. Since this test doesn't
+     * use the allocated memory if there is a valid cap it must have leaked from
+     * the allocator, which is bad.
+     */
+    void** vp = static_cast<void**>(p);
+    for (size_t n = 0; n < alloc_size / sizeof(*vp); vp++, n++)
+    {
+      void* c = *vp;
+      if (__builtin_cheri_tag_get(c))
+      {
+        printf("Found cap tag set in alloc: %#p at %#p\n", c, vp);
+        failed = true;
+      }
+    }
   }
 #endif
   if (exact_size && (alloc_size != expected_size) && (size != 0))
@@ -220,6 +239,11 @@ int main(int argc, char** argv)
 
   our_free(nullptr);
 
+  /* A very large allocation size that we expect to fail. */
+  const size_t too_big_size = ((size_t)-1) / 2;
+  check_result(too_big_size, 1, our_malloc(too_big_size), ENOMEM, true);
+  errno = SUCCESS;
+
   for (smallsizeclass_t sc = 0; sc < (MAX_SMALL_SIZECLASS_BITS + 4); sc++)
   {
     const size_t size = bits::one_at_bit(sc);
@@ -233,6 +257,9 @@ int main(int argc, char** argv)
   test_calloc(0, 0, SUCCESS, false);
 
   our_free(nullptr);
+
+  test_calloc(1, too_big_size, ENOMEM, true);
+  errno = SUCCESS;
 
   for (smallsizeclass_t sc = 0; sc < NUM_SMALL_SIZECLASSES; sc++)
   {
@@ -257,7 +284,7 @@ int main(int argc, char** argv)
     const size_t size = sizeclass_to_size(sc);
     test_realloc(our_malloc(size), size, SUCCESS, false);
     test_realloc(nullptr, size, SUCCESS, false);
-    test_realloc(our_malloc(size), ((size_t)-1) / 2, ENOMEM, true);
+    test_realloc(our_malloc(size), too_big_size, ENOMEM, true);
     for (smallsizeclass_t sc2 = 0; sc2 < NUM_SMALL_SIZECLASSES; sc2++)
     {
       const size_t size2 = sizeclass_to_size(sc2);
@@ -271,7 +298,7 @@ int main(int argc, char** argv)
     const size_t size = bits::one_at_bit(sc);
     test_realloc(our_malloc(size), size, SUCCESS, false);
     test_realloc(nullptr, size, SUCCESS, false);
-    test_realloc(our_malloc(size), ((size_t)-1) / 2, ENOMEM, true);
+    test_realloc(our_malloc(size), too_big_size, ENOMEM, true);
     for (smallsizeclass_t sc2 = 0; sc2 < (MAX_SMALL_SIZECLASS_BITS + 4); sc2++)
     {
       const size_t size2 = bits::one_at_bit(sc2);
@@ -284,7 +311,7 @@ int main(int argc, char** argv)
   test_realloc(our_malloc(64), 4194304, SUCCESS, false);
 
   test_posix_memalign(0, 0, EINVAL, true);
-  test_posix_memalign(((size_t)-1) / 2, 0, EINVAL, true);
+  test_posix_memalign(too_big_size, 0, EINVAL, true);
   test_posix_memalign(OS_PAGE_SIZE, sizeof(uintptr_t) / 2, EINVAL, true);
 
   for (size_t align = sizeof(uintptr_t); align < MAX_SMALL_SIZECLASS_SIZE * 8;
@@ -298,7 +325,7 @@ int main(int argc, char** argv)
       test_memalign(size, align, SUCCESS, false);
     }
     test_posix_memalign(0, align, SUCCESS, false);
-    test_posix_memalign(((size_t)-1) / 2, align, ENOMEM, true);
+    test_posix_memalign(too_big_size, align, ENOMEM, true);
     test_posix_memalign(0, align + 1, EINVAL, true);
   }
 
@@ -309,7 +336,7 @@ int main(int argc, char** argv)
     test_reallocarray(our_malloc(size), 1, size, SUCCESS, false);
     test_reallocarray(our_malloc(size), 1, 0, SUCCESS, false);
     test_reallocarray(nullptr, 1, size, SUCCESS, false);
-    test_reallocarray(our_malloc(size), 1, ((size_t)-1) / 2, ENOMEM, true);
+    test_reallocarray(our_malloc(size), 1, too_big_size, ENOMEM, true);
     for (smallsizeclass_t sc2 = 0; sc2 < (MAX_SMALL_SIZECLASS_BITS + 4); sc2++)
     {
       const size_t size2 = bits::one_at_bit(sc2);
@@ -333,7 +360,7 @@ int main(int argc, char** argv)
       printf("realloc alloc failed with %zu\n", size);
       abort();
     }
-    int r = our_reallocarr(&p, 1, ((size_t)-1) / 2);
+    int r = our_reallocarr(&p, 1, too_big_size);
     if (r != ENOMEM)
     {
       printf("expected failure on allocation\n");
