@@ -332,7 +332,7 @@ namespace snmalloc
 
       SNMALLOC_ASSERT(
         address_cast(start_of_slab) ==
-        address_cast(chunk_record->meta_common.chunk));
+        chunk_record->meta_common.chunk_address());
 
 #if defined(__CHERI_PURE_CAPABILITY__) && !defined(SNMALLOC_CHECK_CLIENT)
       // Zero the whole slab. For CHERI we at least need to clear the freelist
@@ -340,9 +340,9 @@ namespace snmalloc
       // the freelist order as for SNMALLOC_CHECK_CLIENT. Zeroing the whole slab
       // may be more friendly to hw because it does not involve pointer chasing
       // and is amenable to prefetching.
-      SharedStateHandle::Pal::zero(
-        chunk_record->meta_common.chunk.unsafe_ptr(),
-        snmalloc::sizeclass_to_slab_size(sizeclass));
+      chunk_record->meta_common
+        .template zero_chunk<typename SharedStateHandle::Pal>(
+          snmalloc::sizeclass_to_slab_size(sizeclass));
 #endif
 
 #ifdef SNMALLOC_TRACING
@@ -403,7 +403,8 @@ namespace snmalloc
      * by this thread, or handling the final deallocation onto a slab,
      * so it can be reused by other threads.
      */
-    SNMALLOC_SLOW_PATH void dealloc_local_object_slow(const MetaEntry& entry)
+    SNMALLOC_SLOW_PATH void
+    dealloc_local_object_slow(const MetaslabMetaEntry& entry)
     {
       // TODO: Handle message queue on this path?
 
@@ -486,19 +487,20 @@ namespace snmalloc
         [local_state](freelist::QueuePtr p) SNMALLOC_FAST_PATH_LAMBDA {
           return capptr_domesticate<SharedStateHandle>(local_state, p);
         };
-      auto cb = [this, &need_post](freelist::HeadPtr msg)
-                  SNMALLOC_FAST_PATH_LAMBDA {
+      auto cb = [this,
+                 &need_post](freelist::HeadPtr msg) SNMALLOC_FAST_PATH_LAMBDA {
 #ifdef SNMALLOC_TRACING
-                    std::cout << "Handling remote" << std::endl;
+        std::cout << "Handling remote" << std::endl;
 #endif
 
-                    auto& entry = SharedStateHandle::Pagemap::get_metaentry(
-                      snmalloc::address_cast(msg));
+        auto& entry =
+          SharedStateHandle::Pagemap::template get_metaentry<MetaslabMetaEntry>(
+            snmalloc::address_cast(msg));
 
-                    handle_dealloc_remote(entry, msg.as_void(), need_post);
+        handle_dealloc_remote(entry, msg.as_void(), need_post);
 
-                    return true;
-                  };
+        return true;
+      };
 
       if constexpr (SharedStateHandle::Options.QueueHeadsAreTame)
       {
@@ -532,7 +534,7 @@ namespace snmalloc
      * need_post will be set to true, if capacity is exceeded.
      */
     void handle_dealloc_remote(
-      const MetaEntry& entry,
+      const MetaslabMetaEntry& entry,
       CapPtr<void, capptr::bounds::Alloc> p,
       bool& need_post)
     {
@@ -672,8 +674,10 @@ namespace snmalloc
     SNMALLOC_FAST_PATH void
     dealloc_local_object(CapPtr<void, capptr::bounds::Alloc> p)
     {
-      const MetaEntry& entry =
-        SharedStateHandle::Pagemap::get_metaentry(snmalloc::address_cast(p));
+      // MetaEntry-s seen here are expected to have meaningful Remote pointers
+      auto& entry =
+        SharedStateHandle::Pagemap::template get_metaentry<MetaslabMetaEntry>(
+          snmalloc::address_cast(p));
       if (SNMALLOC_LIKELY(dealloc_local_object_fast(entry, p, entropy)))
         return;
 
@@ -681,7 +685,7 @@ namespace snmalloc
     }
 
     SNMALLOC_FAST_PATH static bool dealloc_local_object_fast(
-      const MetaEntry& entry,
+      const MetaslabMetaEntry& entry,
       CapPtr<void, capptr::bounds::Alloc> p,
       LocalEntropy& entropy)
     {
@@ -786,8 +790,8 @@ namespace snmalloc
       auto [slab, meta] = SharedStateHandle::alloc_chunk(
         get_backend_local_state(),
         slab_size,
-        public_state(),
-        sizeclass_t::from_small_class(sizeclass));
+        MetaslabMetaEntry::encode(
+          public_state(), sizeclass_t::from_small_class(sizeclass)));
 
       if (slab == nullptr)
       {
@@ -840,8 +844,9 @@ namespace snmalloc
         {
           bool need_post = true; // Always going to post, so ignore.
           auto n_tame = p_tame->atomic_read_next(key_global, domesticate);
-          auto& entry = SharedStateHandle::Pagemap::get_metaentry(
-            snmalloc::address_cast(p_tame));
+          const MetaslabMetaEntry& entry =
+            SharedStateHandle::Pagemap::template get_metaentry<
+              MetaslabMetaEntry>(snmalloc::address_cast(p_tame));
           handle_dealloc_remote(entry, p_tame.as_void(), need_post);
           p_tame = n_tame;
         }

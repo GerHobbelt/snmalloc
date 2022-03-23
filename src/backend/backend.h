@@ -1,6 +1,5 @@
 #pragma once
 #include "../mem/allocconfig.h"
-#include "../mem/metaslab.h"
 #include "../pal/pal.h"
 #include "chunkallocator.h"
 #include "commitrange.h"
@@ -8,6 +7,7 @@
 #include "empty_range.h"
 #include "globalrange.h"
 #include "largebuddyrange.h"
+#include "metatypes.h"
 #include "pagemap.h"
 #include "pagemapregisterrange.h"
 #include "palrange.h"
@@ -59,10 +59,14 @@ namespace snmalloc
        * Set template parameter to true if it not an error
        * to access a location that is not backed by a chunk.
        */
-      template<bool potentially_out_of_range = false>
-      SNMALLOC_FAST_PATH static const MetaEntry& get_metaentry(address_t p)
+      template<typename Ret = MetaEntry, bool potentially_out_of_range = false>
+      SNMALLOC_FAST_PATH static const Ret& get_metaentry(address_t p)
       {
-        return concretePagemap.template get<potentially_out_of_range>(p);
+        static_assert(
+          std::is_base_of_v<MetaEntry, Ret> && sizeof(MetaEntry) == sizeof(Ret),
+          "Backend Pagemap get_metaentry return must look like MetaEntry");
+        return static_cast<const Ret&>(
+          concretePagemap.template get<potentially_out_of_range>(p));
       }
 
       /**
@@ -217,7 +221,8 @@ namespace snmalloc
      *
      * The template argument is the type of the metadata being allocated.  This
      * allows the backend to allocate different types of metadata in different
-     * places or with different policies.
+     * places or with different policies.  The default implementation, here,
+     * does not avail itself of this degree of freedom.
      */
     template<typename T>
     static capptr::Chunk<void>
@@ -249,17 +254,17 @@ namespace snmalloc
      *   (remote, sizeclass, metaslab)
      * where metaslab, is the second element of the pair return.
      */
-    static std::pair<capptr::Chunk<void>, Metaslab*> alloc_chunk(
-      LocalState& local_state,
-      size_t size,
-      RemoteAllocator* remote,
-      sizeclass_t sizeclass)
+    static std::pair<capptr::Chunk<void>, Metaslab*>
+    alloc_chunk(LocalState& local_state, size_t size, uintptr_t ras)
     {
       SNMALLOC_ASSERT(bits::is_pow2(size));
       SNMALLOC_ASSERT(size >= MIN_CHUNK_SIZE);
 
+      SNMALLOC_ASSERT((ras & MetaEntry::REMOTE_BACKEND_MARKER) == 0);
+      ras &= ~MetaEntry::REMOTE_BACKEND_MARKER;
+
       auto meta_cap =
-        local_state.get_meta_range()->alloc_range(sizeof(Metaslab));
+        local_state.get_meta_range()->alloc_range(PAGEMAP_METADATA_STRUCT_SIZE);
 
       auto meta = meta_cap.template as_reinterpret<Metaslab>().unsafe_ptr();
 
@@ -277,7 +282,8 @@ namespace snmalloc
 #endif
       if (p == nullptr)
       {
-        local_state.get_meta_range()->dealloc_range(meta_cap, sizeof(Metaslab));
+        local_state.get_meta_range()->dealloc_range(
+          meta_cap, PAGEMAP_METADATA_STRUCT_SIZE);
         errno = ENOMEM;
 #ifdef SNMALLOC_TRACING
         std::cout << "Out of memory" << std::endl;
@@ -287,7 +293,7 @@ namespace snmalloc
 
       meta->meta_common.chunk = p;
 
-      MetaEntry t(meta, remote, sizeclass);
+      MetaEntry t(&meta->meta_common, ras);
       Pagemap::set_metaentry(address_cast(p), size, t);
 
       p = Aal::capptr_bound<void, capptr::bounds::Chunk>(p, size);
@@ -299,10 +305,17 @@ namespace snmalloc
     {
       auto chunk = chunk_record->meta_common.chunk;
 
-      local_state.get_meta_range()->dealloc_range(
-        capptr::Chunk<void>(chunk_record), sizeof(Metaslab));
+      /*
+       * The backend takes possession of these chunks now, by disassociating
+       * any existing remote allocator and metadata structure.  If
+       * interrogated, the sizeclass reported by the MetaEntry is 0, which has
+       * size 0.
+       */
+      MetaEntry t(nullptr, MetaEntry::REMOTE_BACKEND_MARKER);
+      Pagemap::set_metaentry(address_cast(chunk), size, t);
 
-      // TODO, should we set the sizeclass to something specific here?
+      local_state.get_meta_range()->dealloc_range(
+        capptr::Chunk<void>(chunk_record), PAGEMAP_METADATA_STRUCT_SIZE);
 
       local_state.object_range->dealloc_range(chunk, size);
     }

@@ -7,6 +7,7 @@
  */
 
 #include "../backend/backend_concept.h"
+#include "../backend/metatypes.h"
 #include "../ds/mpmcstack.h"
 #include "../ds/spmcstack.h"
 #include "../mem/metaslab.h"
@@ -29,21 +30,14 @@ namespace snmalloc
     MetaCommon meta_common;
     std::atomic<ChunkRecord*> next;
   };
-  static_assert(std::is_standard_layout_v<ChunkRecord>);
-  static_assert(
-    offsetof(ChunkRecord, meta_common) == 0,
-    "ChunkRecord and Metaslab must share a common prefix");
+#if defined(USE_METADATA_CONCEPT)
+  static_assert(ConceptMetadataStruct<ChunkRecord>);
+#endif
 
   /**
    * How many slab sizes that can be provided.
    */
   constexpr size_t NUM_SLAB_SIZES = Pal::address_bits - MIN_CHUNK_BITS;
-
-  /**
-   * Used to ensure the per slab meta data is large enough for both use cases.
-   */
-  static_assert(
-    sizeof(Metaslab) >= sizeof(ChunkRecord), "We conflate these two types.");
 
   /**
    * Number of free stacks per chunk size that each allocator will use.
@@ -189,10 +183,9 @@ namespace snmalloc
     static std::pair<capptr::Chunk<void>, Metaslab*> alloc_chunk(
       typename SharedStateHandle::LocalState& local_state,
       ChunkAllocatorLocalState& chunk_alloc_local_state,
-      sizeclass_t sizeclass,
       chunksizeclass_t slab_sizeclass,
       size_t slab_size,
-      RemoteAllocator* remote)
+      uintptr_t ras)
     {
       using PAL = typename SharedStateHandle::Pal;
       ChunkAllocatorState& state =
@@ -240,7 +233,7 @@ namespace snmalloc
                   << " memory in stacks " << state.memory_in_stacks
                   << std::endl;
 #endif
-        MetaEntry entry{meta, remote, sizeclass};
+        MetaEntry entry{&meta->meta_common, ras};
         SharedStateHandle::Pagemap::set_metaentry(
           address_cast(slab), slab_size, entry);
         return {slab, meta};
@@ -248,15 +241,15 @@ namespace snmalloc
 
       // Allocate a fresh slab as there are no available ones.
       // First create meta-data
-      auto [slab, meta] = SharedStateHandle::alloc_chunk(
-        &local_state, slab_size, remote, sizeclass);
+      auto [slab, meta] =
+        SharedStateHandle::alloc_chunk(&local_state, slab_size, ras);
 #ifdef SNMALLOC_TRACING
       std::cout << "Create slab:" << slab.unsafe_ptr() << " slab_sizeclass "
                 << slab_sizeclass << " size " << slab_size << std::endl;
 #endif
 
       state.add_peak_memory_usage(slab_size);
-      state.add_peak_memory_usage(sizeof(Metaslab));
+      state.add_peak_memory_usage(PAGEMAP_METADATA_STRUCT_SIZE);
       // TODO handle bounded versus lazy pagemaps in stats
       state.add_peak_memory_usage(
         (slab_size / MIN_CHUNK_SIZE) * sizeof(MetaEntry));
