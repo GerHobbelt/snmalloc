@@ -88,16 +88,12 @@ void check_result(size_t size, size_t align, void* p, int err, bool null)
       expected_size);
     failed = true;
   }
-  if (
-    (static_cast<size_t>(reinterpret_cast<uintptr_t>(p) % align) != 0) &&
-    (size != 0))
+  if (((address_cast(p) % align) != 0) && (size != 0))
   {
     INFO("Address is {}, but required to be aligned to {}.\n", p, align);
     failed = true;
   }
-  if (
-    static_cast<size_t>(
-      reinterpret_cast<uintptr_t>(p) % natural_alignment(size)) != 0)
+  if ((address_cast(p) % natural_alignment(size)) != 0)
   {
     INFO(
       "Address is {}, but should have natural alignment to {}.\n",
@@ -216,7 +212,7 @@ int main(int argc, char** argv)
   //
   // Note: We cannot use the check or assert macros here because they depend on
   // `MessageBuilder` working.  They are safe to use in any other test.
-  void* fakeptr = reinterpret_cast<void*>(static_cast<uintptr_t>(0x42));
+  void* fakeptr = unsafe_from_uintptr<void>(static_cast<uintptr_t>(0x42));
   MessageBuilder<1024> b{
     "testing pointer {} size_t {} message, {} world, null is {}, -123456 is "
     "{}, 1234567 is {}",
