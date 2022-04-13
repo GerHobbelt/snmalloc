@@ -1,7 +1,6 @@
 #pragma once
 
 #include "../backend/backend.h"
-#include "../backend/chunkallocator.h"
 #include "../mem/corealloc.h"
 #include "../mem/pool.h"
 #include "commonconfig.h"
@@ -61,7 +60,7 @@ namespace snmalloc
     {
       FlagLock lock{initialisation_lock};
 #ifdef SNMALLOC_TRACING
-      std::cout << "Run init_impl" << std::endl;
+      message<1024>("Run init_impl");
 #endif
 
       if (initialised)

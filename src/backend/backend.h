@@ -1,7 +1,6 @@
 #pragma once
 #include "../mem/allocconfig.h"
 #include "../pal/pal.h"
-#include "chunkallocator.h"
 #include "commitrange.h"
 #include "commonconfig.h"
 #include "empty_range.h"
@@ -129,8 +128,9 @@ namespace snmalloc
 #if defined(OPEN_ENCLAVE)
     // Single global buddy allocator is used on open enclave due to
     // the limited address space.
-    using GlobalR = GlobalRange<StatsR<SmallBuddyRange<
-      LargeBuddyRange<EmptyRange, bits::BITS - 1, bits::BITS - 1, Pagemap>>>>;
+    using StatsR = StatsRange<SmallBuddyRange<
+      LargeBuddyRange<EmptyRange, bits::BITS - 1, bits::BITS - 1, Pagemap>>>;
+    using GlobalR = GlobalRange<StatsR>;
     using ObjectRange = GlobalR;
     using GlobalMetaRange = ObjectRange;
 #else
@@ -235,6 +235,9 @@ namespace snmalloc
       }
       else
       {
+        static_assert(
+          GlobalMetaRange::ConcurrencySafe,
+          "Global meta data range needs to be concurrency safe.");
         typename GlobalMetaRange::State global_state;
         p = global_state->alloc_range(bits::next_pow2(size));
       }
@@ -277,8 +280,7 @@ namespace snmalloc
       auto p = local_state.object_range->alloc_range(size);
 
 #ifdef SNMALLOC_TRACING
-      std::cout << "Alloc chunk: " << p.unsafe_ptr() << " (" << size << ")"
-                << std::endl;
+      message<1024>("Alloc chunk: {} ({})", p.unsafe_ptr(), size);
 #endif
       if (p == nullptr)
       {
@@ -286,7 +288,7 @@ namespace snmalloc
           meta_cap, PAGEMAP_METADATA_STRUCT_SIZE);
         errno = ENOMEM;
 #ifdef SNMALLOC_TRACING
-        std::cout << "Out of memory" << std::endl;
+        message<1024>("Out of memory");
 #endif
         return {p, nullptr};
       }
@@ -300,10 +302,10 @@ namespace snmalloc
       return {p, meta};
     }
 
-    static void dealloc_chunk(
-      LocalState& local_state, ChunkRecord* chunk_record, size_t size)
+    static void
+    dealloc_chunk(LocalState& local_state, MetaCommon& meta_common, size_t size)
     {
-      auto chunk = chunk_record->meta_common.chunk;
+      auto chunk = meta_common.chunk;
 
       /*
        * The backend takes possession of these chunks now, by disassociating
@@ -315,7 +317,7 @@ namespace snmalloc
       Pagemap::set_metaentry(address_cast(chunk), size, t);
 
       local_state.get_meta_range()->dealloc_range(
-        capptr::Chunk<void>(chunk_record), PAGEMAP_METADATA_STRUCT_SIZE);
+        capptr::Chunk<void>(&meta_common), PAGEMAP_METADATA_STRUCT_SIZE);
 
       local_state.object_range->dealloc_range(chunk, size);
     }

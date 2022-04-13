@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../backend/chunkallocator.h"
 #include "../ds/defines.h"
 #include "allocconfig.h"
 #include "localcache.h"
@@ -282,7 +281,7 @@ namespace snmalloc
       bumpptr = slab_end;
     }
 
-    ChunkRecord* clear_slab(Metaslab* meta, smallsizeclass_t sizeclass)
+    void clear_slab(Metaslab* meta, smallsizeclass_t sizeclass)
     {
       auto& key = entropy.get_free_list_key();
       freelist::Iter<> fl;
@@ -324,15 +323,13 @@ namespace snmalloc
       SNMALLOC_ASSERT(
         count == snmalloc::sizeclass_to_slab_object_count(sizeclass));
 #endif
-      ChunkRecord* chunk_record = reinterpret_cast<ChunkRecord*>(meta);
       // TODO: This is a capability amplification as we are saying we
       // have the whole chunk.
       auto start_of_slab = pointer_align_down<void>(
         p, snmalloc::sizeclass_to_slab_size(sizeclass));
 
       SNMALLOC_ASSERT(
-        address_cast(start_of_slab) ==
-        chunk_record->meta_common.chunk_address());
+        address_cast(start_of_slab) == meta->meta_common.chunk_address());
 
 #if defined(__CHERI_PURE_CAPABILITY__) && !defined(SNMALLOC_CHECK_CLIENT)
       // Zero the whole slab. For CHERI we at least need to clear the freelist
@@ -340,18 +337,18 @@ namespace snmalloc
       // the freelist order as for SNMALLOC_CHECK_CLIENT. Zeroing the whole slab
       // may be more friendly to hw because it does not involve pointer chasing
       // and is amenable to prefetching.
-      chunk_record->meta_common
-        .template zero_chunk<typename SharedStateHandle::Pal>(
-          snmalloc::sizeclass_to_slab_size(sizeclass));
+      meta->meta_common.template zero_chunk<typename SharedStateHandle::Pal>(
+        snmalloc::sizeclass_to_slab_size(sizeclass));
 #endif
 
 #ifdef SNMALLOC_TRACING
-      std::cout << "Slab " << start_of_slab.unsafe_ptr()
-                << " is unused, Object sizeclass " << sizeclass << std::endl;
+      message<1024>(
+        "Slab {}  is unused, Object sizeclass {}",
+        start_of_slab.unsafe_ptr(),
+        sizeclass);
 #else
       UNUSED(start_of_slab);
 #endif
-      return chunk_record;
     }
 
     template<bool check_slabs = false>
@@ -386,11 +383,11 @@ namespace snmalloc
 
         // TODO delay the clear to the next user of the slab, or teardown so
         // don't touch the cache lines at this point in snmalloc_check_client.
-        auto chunk_record = clear_slab(meta, sizeclass);
+        clear_slab(meta, sizeclass);
 
         SharedStateHandle::dealloc_chunk(
           get_backend_local_state(),
-          chunk_record,
+          meta->meta_common,
           sizeclass_to_slab_size(sizeclass));
 
         return true;
@@ -417,15 +414,13 @@ namespace snmalloc
         size_t size = bits::one_at_bit(entry_sizeclass);
 
 #ifdef SNMALLOC_TRACING
-        std::cout << "Large deallocation: " << size << std::endl;
+        message<1024>("Large deallocation: {}", size);
 #else
         UNUSED(size);
 #endif
 
-        auto slab_record = reinterpret_cast<ChunkRecord*>(meta);
-
         SharedStateHandle::dealloc_chunk(
-          get_backend_local_state(), slab_record, size);
+          get_backend_local_state(), meta->meta_common, size);
 
         return;
       }
@@ -444,7 +439,7 @@ namespace snmalloc
         alloc_classes[sizeclass].length++;
 
 #ifdef SNMALLOC_TRACING
-        std::cout << "Slab is woken up" << std::endl;
+        message<1024>("Slab is woken up");
 #endif
 
         ticker.check_tick();
@@ -490,7 +485,7 @@ namespace snmalloc
       auto cb = [this,
                  &need_post](freelist::HeadPtr msg) SNMALLOC_FAST_PATH_LAMBDA {
 #ifdef SNMALLOC_TRACING
-        std::cout << "Handling remote" << std::endl;
+        message<1024>("Handling remote");
 #endif
 
         auto& entry =
@@ -569,7 +564,7 @@ namespace snmalloc
     void init()
     {
 #ifdef SNMALLOC_TRACING
-      std::cout << "Making an allocator." << std::endl;
+      message<1024>("Making an allocator.");
 #endif
       // Entropy must be first, so that all data-structures can use the key
       // it generates.
@@ -783,8 +778,7 @@ namespace snmalloc
       size_t slab_size = sizeclass_to_slab_size(sizeclass);
 
 #ifdef SNMALLOC_TRACING
-      std::cout << "rsize " << rsize << std::endl;
-      std::cout << "slab size " << slab_size << std::endl;
+      message<1024>("small_alloc_slow rsize={} slab size={}", rsize, slab_size);
 #endif
 
       auto [slab, meta] = SharedStateHandle::alloc_chunk(
@@ -879,7 +873,7 @@ namespace snmalloc
     void attach(LocalCache* c)
     {
 #ifdef SNMALLOC_TRACING
-      std::cout << "Attach cache to " << this << std::endl;
+      message<1024>("Attach cache to {}", this);
 #endif
       attached_cache = c;
 
@@ -923,7 +917,7 @@ namespace snmalloc
       init_message_queue();
 
 #ifdef SNMALLOC_TRACING
-      std::cout << "debug_is_empty - done" << std::endl;
+      message<1024>("debug_is_empty - done");
 #endif
       return sent_something;
     }
@@ -941,7 +935,7 @@ namespace snmalloc
     bool debug_is_empty(bool* result)
     {
 #ifdef SNMALLOC_TRACING
-      std::cout << "debug_is_empty" << std::endl;
+      message<1024>("debug_is_empty");
 #endif
       if (attached_cache == nullptr)
       {
@@ -950,7 +944,7 @@ namespace snmalloc
         LocalCache temp(public_state());
         attach(&temp);
 #ifdef SNMALLOC_TRACING
-        std::cout << "debug_is_empty - attach a cache" << std::endl;
+        message<1024>("debug_is_empty - attach a cache");
 #endif
         auto sent_something = debug_is_empty_impl(result);
 
