@@ -3,12 +3,24 @@
 #if defined(__FreeBSD__) && !defined(_KERNEL)
 #  include "pal_bsd_aligned.h"
 
-// On CHERI platforms, we need to know the value of CHERI_PERM_CHERIABI_VMMAP.
+// On CHERI platforms, we need to know the value of CHERI_PERM_SW_VMEM.
 // This pollutes the global namespace a little, sadly, but I think only with
 // symbols that begin with CHERI_, which is as close to namespaces as C offers.
 #  if defined(__CHERI_PURE_CAPABILITY__)
 #    include <cheri/cherireg.h>
+#    if !defined(CHERI_PERM_SW_VMEM)
+#      define CHERI_PERM_SW_VMEM CHERI_PERM_CHERIABI_VMMAP
+#    endif
 #  endif
+
+/**
+ * Direct system-call wrappers so that we can skip libthr interception, which
+ * won't work if malloc is broken.
+ * @{
+ */
+extern "C" ssize_t __sys_writev(int fd, const struct iovec* iov, int iovcnt);
+extern "C" int __sys_fsync(int fd);
+/// @}
 
 namespace snmalloc
 {
@@ -18,7 +30,8 @@ namespace snmalloc
    * This adds FreeBSD-specific aligned allocation to the generic BSD
    * implementation.
    */
-  class PALFreeBSD : public PALBSD_Aligned<PALFreeBSD>
+  class PALFreeBSD
+  : public PALBSD_Aligned<PALFreeBSD, __sys_writev, __sys_fsync>
   {
   public:
     /**
@@ -108,7 +121,7 @@ namespace snmalloc
 
     /**
      * On CheriBSD, exporting a pointer means stripping it of the authority to
-     * manage the address space it references by clearing the CHERIABI_VMMAP
+     * manage the address space it references by clearing the SW_VMEM
      * permission bit.
      */
     template<typename T, SNMALLOC_CONCEPT(capptr::ConceptBound) B>
@@ -124,8 +137,7 @@ namespace snmalloc
       }
       return CapPtr<T, capptr::user_address_control_type<B>>(
         __builtin_cheri_perms_and(
-          p.unsafe_ptr(),
-          ~static_cast<unsigned int>(CHERI_PERM_CHERIABI_VMMAP)));
+          p.unsafe_ptr(), ~static_cast<unsigned int>(CHERI_PERM_SW_VMEM)));
     }
 #  endif
   };
