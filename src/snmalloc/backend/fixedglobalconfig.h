@@ -8,7 +8,7 @@ namespace snmalloc
   /**
    * A single fixed address range allocator configuration
    */
-  template<SNMALLOC_CONCEPT(ConceptPAL) PAL>
+  template<SNMALLOC_CONCEPT(IsPAL) PAL>
   class FixedRangeConfig final : public CommonConfig
   {
   public:
@@ -87,7 +87,7 @@ namespace snmalloc
     }
 
     /* Verify that a pointer points into the region managed by this config */
-    template<typename T, SNMALLOC_CONCEPT(capptr::ConceptBound) B>
+    template<typename T, SNMALLOC_CONCEPT(capptr::IsBound) B>
     static SNMALLOC_FAST_PATH CapPtr<
       T,
       typename B::template with_wildness<capptr::dimension::Wildness::Tame>>

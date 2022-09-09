@@ -198,8 +198,8 @@ namespace snmalloc
      */
     template<
       typename T,
-      SNMALLOC_CONCEPT(capptr::ConceptBound) BOut,
-      SNMALLOC_CONCEPT(capptr::ConceptBound) BIn,
+      SNMALLOC_CONCEPT(capptr::IsBound) BOut,
+      SNMALLOC_CONCEPT(capptr::IsBound) BIn,
       typename U = T>
     static SNMALLOC_FAST_PATH CapPtr<T, BOut>
     capptr_bound(CapPtr<U, BIn> a, size_t size) noexcept
@@ -244,7 +244,7 @@ namespace snmalloc
   using Aal = AAL_Generic<AAL_NoStrictProvenance<AAL_Arch>>;
 #endif
 
-  template<AalFeatures F, SNMALLOC_CONCEPT(ConceptAAL) AAL = Aal>
+  template<AalFeatures F, SNMALLOC_CONCEPT(IsAAL) AAL = Aal>
   constexpr static bool aal_supports = (AAL::aal_features & F) == F;
 
   /*
