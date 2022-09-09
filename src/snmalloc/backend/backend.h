@@ -1,223 +1,32 @@
 #pragma once
 #include "../backend_helpers/backend_helpers.h"
 
-#if defined(SNMALLOC_CHECK_CLIENT) && !defined(OPEN_ENCLAVE)
-/**
- * Protect meta data blocks by allocating separate from chunks for
- * user allocations. This involves leaving gaps in address space.
- * This is less efficient, so should only be applied for the checked
- * build.
- *
- * On Open Enclave the address space is limited, so we disable this
- * feature.
- */
-#  define SNMALLOC_META_PROTECTED
-#endif
-
 namespace snmalloc
 {
   /**
    * This class implements the standard backend for handling allocations.
-   * It abstracts page table management and address space management.
+   * It is parameterised by its Pagemap management and
+   * address space management (LocalState).
    */
-  template<SNMALLOC_CONCEPT(ConceptPAL) PAL, bool fixed_range>
-  class BackendAllocator : public CommonConfig
+  template<
+    SNMALLOC_CONCEPT(ConceptPAL) PAL,
+    typename PagemapEntry,
+    typename Pagemap,
+    typename LocalState>
+  class BackendAllocator
   {
+    using GlobalMetaRange = typename LocalState::GlobalMetaRange;
+    using Stats = typename LocalState::Stats;
+
   public:
-    class PageMapEntry;
     using Pal = PAL;
-    using SlabMetadata = FrontendSlabMetadata;
+    using SlabMetadata = typename PagemapEntry::SlabMetadata;
 
-  private:
-    using ConcretePagemap =
-      FlatPagemap<MIN_CHUNK_BITS, PageMapEntry, PAL, fixed_range>;
+#ifdef __cpp_concepts
+    static_assert(IsSlabMeta_Arena<SlabMetadata>);
+#endif
 
   public:
-    /**
-     * Example of type stored in the pagemap.
-     * The following class could be replaced by:
-     *
-     * ```
-     * using PageMapEntry = FrontendMetaEntry<SlabMetadata>;
-     * ```
-     *
-     * The full form here provides an example of how to extend the pagemap
-     * entries.  It also guarantees that the front end never directly
-     * constructs meta entries, it only ever reads them or modifies them in
-     * place.
-     */
-    class PageMapEntry : public FrontendMetaEntry<SlabMetadata>
-    {
-      /**
-       * The private initialising constructor is usable only by this back end.
-       */
-      friend class BackendAllocator;
-
-      /**
-       * The private default constructor is usable only by the pagemap.
-       */
-      friend ConcretePagemap;
-
-      /**
-       * The only constructor that creates newly initialised meta entries.
-       * This is callable only by the back end.  The front end may copy,
-       * query, and update these entries, but it may not create them
-       * directly.  This contract allows the back end to store any arbitrary
-       * metadata in meta entries when they are first constructed.
-       */
-      SNMALLOC_FAST_PATH
-      PageMapEntry(SlabMetadata* meta, uintptr_t ras)
-      : FrontendMetaEntry<SlabMetadata>(meta, ras)
-      {}
-
-      /**
-       * Copy assignment is used only by the pagemap.
-       */
-      PageMapEntry& operator=(const PageMapEntry& other)
-      {
-        FrontendMetaEntry<SlabMetadata>::operator=(other);
-        return *this;
-      }
-
-      /**
-       * Default constructor.  This must be callable from the pagemap.
-       */
-      SNMALLOC_FAST_PATH PageMapEntry() = default;
-    };
-    using Pagemap = BasicPagemap<
-      BackendAllocator,
-      PAL,
-      ConcretePagemap,
-      PageMapEntry,
-      fixed_range>;
-
-#if defined(_WIN32) || defined(__CHERI_PURE_CAPABILITY__)
-    static constexpr bool CONSOLIDATE_PAL_ALLOCS = false;
-#else
-    static constexpr bool CONSOLIDATE_PAL_ALLOCS = true;
-#endif
-
-    // Set up source of memory
-    using Base = std::conditional_t<
-      fixed_range,
-      EmptyRange,
-      Pipe<
-        PalRange<Pal>,
-        PagemapRegisterRange<Pagemap, CONSOLIDATE_PAL_ALLOCS>>>;
-
-    static constexpr size_t MinBaseSizeBits()
-    {
-      if constexpr (pal_supports<AlignedAllocation, PAL>)
-      {
-        return bits::next_pow2_bits_const(PAL::minimum_alloc_size);
-      }
-      else
-      {
-        return MIN_CHUNK_BITS;
-      }
-    }
-
-    // Global range of memory
-    using GlobalR = Pipe<
-      Base,
-      LargeBuddyRange<24, bits::BITS - 1, Pagemap, MinBaseSizeBits()>,
-      LogRange<2>,
-      GlobalRange<>>;
-
-#ifdef SNMALLOC_META_PROTECTED
-    // Introduce two global ranges, so we don't mix Object and Meta
-    using CentralObjectRange = Pipe<
-      GlobalR,
-      LargeBuddyRange<24, bits::BITS - 1, Pagemap, MinBaseSizeBits()>,
-      LogRange<3>,
-      GlobalRange<>>;
-
-    using CentralMetaRange = Pipe<
-      GlobalR,
-      SubRange<PAL, 6>, // Use SubRange to introduce guard pages.
-      LargeBuddyRange<24, bits::BITS - 1, Pagemap, MinBaseSizeBits()>,
-      LogRange<4>,
-      GlobalRange<>>;
-
-    // Source for object allocations
-    using StatsObject =
-      Pipe<CentralObjectRange, CommitRange<PAL>, StatsRange<>>;
-
-    using ObjectRange =
-      Pipe<StatsObject, LargeBuddyRange<21, 21, Pagemap>, LogRange<5>>;
-
-    using StatsMeta = Pipe<CentralMetaRange, CommitRange<PAL>, StatsRange<>>;
-
-    using MetaRange = Pipe<
-      StatsMeta,
-      LargeBuddyRange<21 - 6, bits::BITS - 1, Pagemap>,
-      SmallBuddyRange<>>;
-
-    // Create global range that can service small meta-data requests.
-    // Don't want to add this to the CentralMetaRange to move Commit outside the
-    // lock on the common case.
-    using GlobalMetaRange = Pipe<StatsMeta, SmallBuddyRange<>, GlobalRange<>>;
-    using Stats = StatsCombiner<StatsObject, StatsMeta>;
-#else
-    // Source for object allocations and metadata
-    // No separation between the two
-    using Stats = Pipe<GlobalR, StatsRange<>>;
-    using ObjectRange = Pipe<
-      Stats,
-      CommitRange<PAL>,
-      LargeBuddyRange<21, 21, Pagemap>,
-      SmallBuddyRange<>>;
-    using GlobalMetaRange = Pipe<ObjectRange, GlobalRange<>>;
-#endif
-
-    struct LocalState
-    {
-      ObjectRange object_range;
-
-#ifdef SNMALLOC_META_PROTECTED
-      MetaRange meta_range;
-
-      MetaRange& get_meta_range()
-      {
-        return meta_range;
-      }
-#else
-      ObjectRange& get_meta_range()
-      {
-        return object_range;
-      }
-#endif
-    };
-
-  public:
-    template<bool fixed_range_ = fixed_range>
-    static std::enable_if_t<!fixed_range_> init()
-    {
-      static_assert(fixed_range_ == fixed_range, "Don't set SFINAE parameter!");
-
-      Pagemap::concretePagemap.init();
-    }
-
-    template<bool fixed_range_ = fixed_range>
-    static std::enable_if_t<fixed_range_> init(void* base, size_t length)
-    {
-      static_assert(fixed_range_ == fixed_range, "Don't set SFINAE parameter!");
-
-      auto [heap_base, heap_length] =
-        Pagemap::concretePagemap.init(base, length);
-
-      Pagemap::register_range(address_cast(heap_base), heap_length);
-
-      // Push memory into the global range.
-      range_to_pow_2_blocks<MIN_CHUNK_BITS>(
-        capptr::Chunk<void>(heap_base),
-        heap_length,
-        [&](capptr::Chunk<void> p, size_t sz, bool) {
-          GlobalR g;
-          g.dealloc_range(p, sz);
-        });
-    }
-
     /**
      * Provide a block of meta-data with size and align.
      *
@@ -230,10 +39,10 @@ namespace snmalloc
      * does not avail itself of this degree of freedom.
      */
     template<typename T>
-    static capptr::Chunk<void>
+    static capptr::Arena<void>
     alloc_meta_data(LocalState* local_state, size_t size)
     {
-      capptr::Chunk<void> p;
+      capptr::Arena<void> p;
       if (local_state != nullptr)
       {
         p = local_state->get_meta_range().alloc_range_with_leftover(size);
@@ -279,7 +88,7 @@ namespace snmalloc
         return {nullptr, nullptr};
       }
 
-      auto p = local_state.object_range.alloc_range(size);
+      capptr::Arena<void> p = local_state.get_object_range()->alloc_range(size);
 
 #ifdef SNMALLOC_TRACING
       message<1024>("Alloc chunk: {} ({})", p.unsafe_ptr(), size);
@@ -292,16 +101,25 @@ namespace snmalloc
 #ifdef SNMALLOC_TRACING
         message<1024>("Out of memory");
 #endif
-        return {p, nullptr};
+        return {nullptr, nullptr};
       }
 
+      meta->arena_set(p);
       typename Pagemap::Entry t(meta, ras);
       Pagemap::set_metaentry(address_cast(p), size, t);
 
-      p = Aal::capptr_bound<void, capptr::bounds::Chunk>(p, size);
-      return {p, meta};
+      return {Aal::capptr_bound<void, capptr::bounds::Chunk>(p, size), meta};
     }
 
+    /**
+     * Deallocate a chunk of memory of size `size` and base `alloc`.
+     * The `slab_metadata` is the meta-data block associated with this
+     * chunk.  The backend can recalculate this, but as the callee will
+     * already have it, we take it for possibly more optimal code.
+     *
+     * LocalState contains all the information about the various ranges
+     * that are used by the backend to manage the address space.
+     */
     static void dealloc_chunk(
       LocalState& local_state,
       SlabMetadata& slab_metadata,
@@ -326,14 +144,23 @@ namespace snmalloc
         Pagemap::get_metaentry(address_cast(alloc)).get_slab_metadata());
       Pagemap::set_metaentry(address_cast(alloc), size, t);
 
-      local_state.get_meta_range().dealloc_range(
-        capptr::Chunk<void>(&slab_metadata), sizeof(SlabMetadata));
+      /*
+       * On CHERI, the passed alloc has had its bounds narrowed to just the
+       * Chunk, and so we retrieve the Arena-bounded cap for use in the
+       * remainder of the backend.
+       */
+      capptr::Arena<void> arena = slab_metadata.arena_get(alloc);
 
-      // On non-CHERI platforms, we don't need to re-derive to get a pointer to
-      // the chunk.  On CHERI platforms this will need to be stored in the
-      // SlabMetadata or similar.
-      capptr::Chunk<void> chunk{alloc.unsafe_ptr()};
-      local_state.object_range.dealloc_range(chunk, size);
+      local_state.get_meta_range().dealloc_range(
+        capptr::Arena<void>::unsafe_from(&slab_metadata), sizeof(SlabMetadata));
+
+      local_state.get_object_range()->dealloc_range(arena, size);
+    }
+
+    template<bool potentially_out_of_range = false>
+    SNMALLOC_FAST_PATH static const PagemapEntry& get_metaentry(address_t p)
+    {
+      return Pagemap::template get_metaentry<potentially_out_of_range>(p);
     }
 
     static size_t get_current_usage()

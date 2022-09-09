@@ -67,6 +67,11 @@ namespace snmalloc
          * Bounded to one or more particular chunk granules
          */
         Chunk,
+        /**
+         * Unbounded return from the kernel.  These correspond, on CHERI
+         * platforms, to kernel-side address space reservations.
+         */
+        Arena
       };
 
       /**
@@ -154,6 +159,11 @@ namespace snmalloc
           (S == dimension::Spatial::Alloc &&
            AS == dimension::AddressSpaceControl::User),
         "Wild pointers must be annotated as tightly bounded");
+      static_assert(
+        (S != dimension::Spatial::Arena) ||
+          (W == dimension::Wildness::Tame &&
+           AS == dimension::AddressSpaceControl::Full),
+        "Arena pointers must be restricted spatially before other dimensions");
     };
 
     // clang-format off
@@ -180,8 +190,16 @@ namespace snmalloc
     namespace bounds
     {
       /**
-       * Internal access to a Chunk of memory.  These flow between the ASM and
-       * the slab allocators, for example.
+       * Internal access to an entire Arena.  These exist only in the backend.
+       */
+      using Arena = bound<
+        dimension::Spatial::Arena,
+        dimension::AddressSpaceControl::Full,
+        dimension::Wildness::Tame>;
+
+      /**
+       * Internal access to a Chunk of memory.  These flow across the boundary
+       * between back- and front-ends, for example.
        */
       using Chunk = bound<
         dimension::Spatial::Chunk,
@@ -242,15 +260,7 @@ namespace snmalloc
         return false;
       }
 
-      switch (BI::spatial)
-      {
-        using namespace capptr::dimension;
-        case Spatial::Chunk:
-          return true;
-
-        case Spatial::Alloc:
-          return BO::spatial == Spatial::Alloc;
-      }
+      return BO::spatial <= BI::spatial;
     }
   } // namespace capptr
 
@@ -273,6 +283,7 @@ namespace snmalloc
 
     constexpr SNMALLOC_FAST_PATH CapPtr() : CapPtr(nullptr) {}
 
+  private:
     /**
      * all other constructions must be explicit
      *
@@ -292,13 +303,25 @@ namespace snmalloc
 #  pragma warning(pop)
 #endif
 
+  public:
+    /**
+     * The CapPtr constructor is not sufficiently intimidating, given that it
+     * can be used to break annotation correctness.  Expose it with a better
+     * name.
+     */
+    static constexpr SNMALLOC_FAST_PATH CapPtr unsafe_from(T* p)
+    {
+      return CapPtr<T, bounds>(p);
+    }
+
     /**
      * Allow static_cast<>-s that preserve bounds but vary the target type.
      */
     template<typename U>
     [[nodiscard]] SNMALLOC_FAST_PATH CapPtr<U, bounds> as_static() const
     {
-      return CapPtr<U, bounds>(static_cast<U*>(this->unsafe_capptr));
+      return CapPtr<U, bounds>::unsafe_from(
+        static_cast<U*>(this->unsafe_capptr));
     }
 
     [[nodiscard]] SNMALLOC_FAST_PATH CapPtr<void, bounds> as_void() const
@@ -312,7 +335,8 @@ namespace snmalloc
     template<typename U>
     [[nodiscard]] SNMALLOC_FAST_PATH CapPtr<U, bounds> as_reinterpret() const
     {
-      return CapPtr<U, bounds>(reinterpret_cast<U*>(this->unsafe_capptr));
+      return CapPtr<U, bounds>::unsafe_from(
+        reinterpret_cast<U*>(this->unsafe_capptr));
     }
 
     SNMALLOC_FAST_PATH bool operator==(const CapPtr& rhs) const
@@ -356,6 +380,9 @@ namespace snmalloc
      */
 
     template<typename T>
+    using Arena = CapPtr<T, bounds::Arena>;
+
+    template<typename T>
     using Chunk = CapPtr<T, bounds::Chunk>;
 
     template<typename T>
@@ -383,7 +410,7 @@ namespace snmalloc
   inline SNMALLOC_FAST_PATH capptr::Alloc<T>
   capptr_chunk_is_alloc(capptr::ChunkUser<T> p)
   {
-    return capptr::Alloc<T>(p.unsafe_ptr());
+    return capptr::Alloc<T>::unsafe_from(p.unsafe_ptr());
   }
 
   /**
@@ -413,7 +440,7 @@ namespace snmalloc
   static inline SNMALLOC_FAST_PATH capptr::AllocWild<void>
   capptr_from_client(void* p)
   {
-    return capptr::AllocWild<void>(p);
+    return capptr::AllocWild<void>::unsafe_from(p);
   }
 
   /**
@@ -427,8 +454,8 @@ namespace snmalloc
   {
     return CapPtr<
       T,
-      typename B::template with_wildness<capptr::dimension::Wildness::Wild>>(
-      p.unsafe_ptr());
+      typename B::template with_wildness<capptr::dimension::Wildness::Wild>>::
+      unsafe_from(p.unsafe_ptr());
   }
 
   /**
@@ -477,7 +504,7 @@ namespace snmalloc
     SNMALLOC_FAST_PATH CapPtr<T, bounds>
     load(std::memory_order order = std::memory_order_seq_cst) noexcept
     {
-      return CapPtr<T, bounds>(this->unsafe_capptr.load(order));
+      return CapPtr<T, bounds>::unsafe_from(this->unsafe_capptr.load(order));
     }
 
     SNMALLOC_FAST_PATH void store(
@@ -491,7 +518,7 @@ namespace snmalloc
       CapPtr<T, bounds> desired,
       std::memory_order order = std::memory_order_seq_cst) noexcept
     {
-      return CapPtr<T, bounds>(
+      return CapPtr<T, bounds>::unsafe_from(
         this->unsafe_capptr.exchange(desired.unsafe_ptr(), order));
     }
 
