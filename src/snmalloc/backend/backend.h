@@ -168,6 +168,12 @@ namespace snmalloc
       return Pagemap::template get_metaentry<potentially_out_of_range>(p);
     }
 
+    template<bool potentially_out_of_range = false>
+    SNMALLOC_FAST_PATH static capptr::Arena<void> amplify(capptr::Alloc<void> p)
+    {
+      return Authmap::template amplify<potentially_out_of_range>(p);
+    }
+
     static size_t get_current_usage()
     {
       Stats stats_state;

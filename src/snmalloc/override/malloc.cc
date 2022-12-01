@@ -227,4 +227,10 @@ extern "C"
     return SNMALLOC_NAME_MANGLE(memalign)(
       OS_PAGE_SIZE, (size + OS_PAGE_SIZE - 1) & ~(OS_PAGE_SIZE - 1));
   }
+
+  SNMALLOC_EXPORT void*
+    SNMALLOC_NAME_MANGLE(malloc_underlying_allocation)(void* ptr)
+  {
+    return ThreadAlloc::get().underlying_alloc(ptr);
+  }
 }
