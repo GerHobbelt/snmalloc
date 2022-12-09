@@ -418,6 +418,14 @@ namespace snmalloc
       }
     }
 
+    void flush_message_queue()
+    {
+      if (SNMALLOC_LIKELY(core_alloc != nullptr))
+      {
+        core_alloc->flush();
+      }
+    }
+
     /**
      * Allocate memory of a dynamically known size.
      */

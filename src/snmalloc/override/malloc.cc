@@ -233,4 +233,9 @@ extern "C"
   {
     return ThreadAlloc::get().underlying_alloc(ptr);
   }
+
+  SNMALLOC_EXPORT void SNMALLOC_NAME_MANGLE(snmalloc_flush_message_queue)(void)
+  {
+    ThreadAlloc::get().flush_message_queue();
+  }
 }
