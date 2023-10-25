@@ -36,7 +36,7 @@ namespace snmalloc
     using LocalState = StandardLocalState<
       Pal,
       Pagemap,
-      Pipe<PalRange<Pal>, PagemapRegisterRange<Pagemap, false>>>;
+      Pipe<PalRange<Pal>, PagemapRegisterRange<Pagemap>>>;
 
     using GlobalPoolState = PoolState<CoreAllocator<CustomConfig>>;
 
@@ -121,7 +121,13 @@ namespace snmalloc
 
 int main()
 {
-  snmalloc::CustomConfig::Pagemap::concretePagemap.init(); // init pagemap
+#  if defined(SNMALLOC_CHECK_CLIENT)
+  static constexpr bool pagemap_randomize = !aal_supports<StrictProvenance>;
+#  else
+  static constexpr bool pagemap_randomize = false;
+#  endif
+
+  snmalloc::CustomConfig::Pagemap::concretePagemap.init<pagemap_randomize>();
   snmalloc::CustomConfig::domesticate_count = 0;
 
   LocalEntropy entropy;
