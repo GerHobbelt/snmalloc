@@ -1,7 +1,6 @@
 #pragma once
 
 #include "../mem/mem.h"
-#include "cheri_slabmetadata_mixin.h"
 
 namespace snmalloc
 {
@@ -24,7 +23,12 @@ namespace snmalloc
     /**
      * The private initialising constructor is usable only by this back end.
      */
-    template<SNMALLOC_CONCEPT(IsPAL) A1, typename A2, typename A3, typename A4>
+    template<
+      SNMALLOC_CONCEPT(IsPAL) A1,
+      typename A2,
+      typename A3,
+      typename A4,
+      typename A5>
     friend class BackendAllocator;
 
     /**
@@ -60,19 +64,9 @@ namespace snmalloc
     SNMALLOC_FAST_PATH DefaultPagemapEntryT() = default;
   };
 
-  class StrictProvenanceSlabMetadata
-  : public StrictProvenanceSlabMetadataMixin<
-      FrontendSlabMetadata<StrictProvenanceSlabMetadata>>
+  class DefaultSlabMetadata : public FrontendSlabMetadata<DefaultSlabMetadata>
   {};
 
-  class LaxProvenanceSlabMetadata
-  : public LaxProvenanceSlabMetadataMixin<
-      FrontendSlabMetadata<LaxProvenanceSlabMetadata>>
-  {};
-
-  using DefaultPagemapEntry = DefaultPagemapEntryT<std::conditional_t<
-    backend_strict_provenance,
-    StrictProvenanceSlabMetadata,
-    LaxProvenanceSlabMetadata>>;
+  using DefaultPagemapEntry = DefaultPagemapEntryT<DefaultSlabMetadata>;
 
 } // namespace snmalloc
