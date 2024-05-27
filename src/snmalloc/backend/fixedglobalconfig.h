@@ -63,13 +63,11 @@ namespace snmalloc
      * C++, and not just its initializer fragment, to initialize a non-prefix
      * subset of the flags (in any order, at that).
      */
-    static constexpr Flags Options = []() constexpr
-    {
+    static constexpr Flags Options = []() constexpr {
       Flags opts = {};
       opts.HasDomesticate = true;
       return opts;
-    }
-    ();
+    }();
 
     // This needs to be a forward reference as the
     // thread local state will need to know about this.
@@ -86,6 +84,12 @@ namespace snmalloc
 
       auto [heap_base, heap_length] =
         Pagemap::concretePagemap.init(base, length);
+
+      // Make this a alloc_config constant.
+      if (length < MIN_HEAP_SIZE_FOR_THREAD_LOCAL_BUDDY)
+      {
+        LocalState::set_small_heap();
+      }
 
       Authmap::arena = capptr::Arena<void>::unsafe_from(heap_base);
 
