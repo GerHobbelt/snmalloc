@@ -158,7 +158,11 @@ namespace snmalloc
       SNMALLOC_ASSERT(x != 0); // Calling with 0 is UB on some implementations
 
 #if defined(_MSC_VER) && !defined(__clang__)
-#  ifdef _WIN64
+#  if defined(_M_ARM64) || defined(_M_ARM64EC)
+      unsigned long n = 0;
+      _BitScanForward64(&n, static_cast<unsigned __int64>(x));
+      return static_cast<size_t>(n);
+#  elif defined(_WIN64)
       return _tzcnt_u64(static_cast<unsigned __int64>(x));
 #  else
       return _tzcnt_u32(static_cast<unsigned int>(x));
@@ -203,7 +207,12 @@ namespace snmalloc
       overflow = __builtin_mul_overflow(x, y, &prod);
       return prod;
 #elif defined(_MSC_VER)
-#  ifdef _WIN64
+#  if defined(_M_ARM64) || defined(_M_ARM64EC)
+      size_t high_prod = __umulh(x, y);
+      size_t prod = x * y;
+      overflow = high_prod != 0;
+      return prod;
+#  elif defined(_WIN64)
       size_t high_prod;
       size_t prod = _umul128(x, y, &high_prod);
       overflow = high_prod != 0;
@@ -313,22 +322,6 @@ namespace snmalloc
      *
      * Does not work for value=0.
      ***********************************************/
-    template<size_t MANTISSA_BITS, size_t LOW_BITS = 0>
-    static size_t to_exp_mant(size_t value)
-    {
-      constexpr size_t LEADING_BIT = one_at_bit(MANTISSA_BITS + LOW_BITS) >> 1;
-      constexpr size_t MANTISSA_MASK = one_at_bit(MANTISSA_BITS) - 1;
-
-      value = value - 1;
-
-      size_t e =
-        bits::BITS - MANTISSA_BITS - LOW_BITS - clz(value | LEADING_BIT);
-      size_t b = (e == 0) ? 0 : 1;
-      size_t m = (value >> (LOW_BITS + e - b)) & MANTISSA_MASK;
-
-      return (e << MANTISSA_BITS) + m;
-    }
-
     template<size_t MANTISSA_BITS, size_t LOW_BITS = 0>
     constexpr size_t to_exp_mant_const(size_t value)
     {
