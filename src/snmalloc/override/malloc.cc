@@ -1,4 +1,3 @@
-#include "libc.h"
 #include "override.h"
 // Must be included after snmalloc headers
 #include "../mem/memcpy.h"
