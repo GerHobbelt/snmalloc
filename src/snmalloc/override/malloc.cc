@@ -1,6 +1,6 @@
 #include "override.h"
 // Must be included after snmalloc headers
-#include "../mem/memcpy.h"
+#include "../global/memcpy.h"
 
 using namespace snmalloc;
 
