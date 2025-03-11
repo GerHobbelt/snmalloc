@@ -6,6 +6,7 @@
 #if defined(SNMALLOC_BACKTRACE_HEADER)
 #  include SNMALLOC_BACKTRACE_HEADER
 #endif
+#include <cstdlib>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -407,6 +408,7 @@ namespace snmalloc
         uint64_t result;
         char buffer[sizeof(uint64_t)];
       };
+
       ssize_t ret;
       int flags = O_RDONLY;
 #if defined(O_CLOEXEC)
