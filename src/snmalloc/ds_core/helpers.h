@@ -4,7 +4,7 @@
 
 #include <array>
 #include <atomic>
-#include <string_view>
+#include <cstddef>
 #include <tuple>
 #include <type_traits>
 
@@ -135,86 +135,6 @@ namespace snmalloc
   }
 
   /**
-   * Sometimes we need atomics with trivial initializer.  Unfortunately, this
-   * became harder to accomplish in C++20.  Fortunately, our rules for accessing
-   * these are at least as strong as those required by C++20's atomic_ref:
-   *
-   *   * The objects outlive any references to them
-   *
-   *   * We always access the objects through references (though we'd be allowed
-   *     to access them without if we knew there weren't other references)
-   *
-   *   * We don't access sub-objects at all, much less concurrently through
-   *     other references.
-   */
-  template<typename T>
-  class TrivialInitAtomic
-  {
-    static_assert(
-      std::is_trivially_default_constructible_v<T>,
-      "TrivialInitAtomic should not attempt to call nontrivial constructors");
-
-#ifdef __cpp_lib_atomic_ref
-    using Val = T;
-    using Ref = std::atomic_ref<T>;
-#else
-    using Val = std::atomic<T>;
-    using Ref = std::atomic<T>&;
-#endif
-    Val v;
-
-  public:
-    /**
-     * Construct a reference to this value; use .load and .store to manipulate
-     * the value.
-     */
-    SNMALLOC_FAST_PATH Ref ref()
-    {
-#ifdef __cpp_lib_atomic_ref
-      return std::atomic_ref<T>(this->v);
-#else
-      return this->v;
-#endif
-    }
-
-    SNMALLOC_FAST_PATH T
-    load(std::memory_order mo = std::memory_order_seq_cst) noexcept
-    {
-      return this->ref().load(mo);
-    }
-
-    SNMALLOC_FAST_PATH void
-    store(T n, std::memory_order mo = std::memory_order_seq_cst) noexcept
-    {
-      return this->ref().store(n, mo);
-    }
-
-    SNMALLOC_FAST_PATH bool compare_exchange_strong(
-      T& exp, T des, std::memory_order mo = std::memory_order_seq_cst) noexcept
-    {
-      return this->ref().compare_exchange_strong(exp, des, mo);
-    }
-
-    SNMALLOC_FAST_PATH T
-    exchange(T des, std::memory_order mo = std::memory_order_seq_cst) noexcept
-    {
-      return this->ref().exchange(des, mo);
-    }
-
-    template<typename Q>
-    SNMALLOC_FAST_PATH
-      typename std::enable_if<std::is_integral<Q>::value, Q>::type
-      fetch_add(
-        Q arg, std::memory_order mo = std::memory_order_seq_cst) noexcept
-    {
-      return this->ref().fetch_add(arg, mo);
-    }
-  };
-
-  static_assert(sizeof(TrivialInitAtomic<char>) == sizeof(char));
-  static_assert(alignof(TrivialInitAtomic<char>) == alignof(char));
-
-  /**
    * Helper class for building fatal errors.  Used by `report_fatal_error` to
    * build an on-stack buffer containing the formatted string.
    */
@@ -272,11 +192,12 @@ namespace snmalloc
     /**
      * Append a string to the buffer.
      */
-    void append(std::string_view sv)
+    template<size_t N>
+    void append(const char (&s)[N])
     {
-      for (auto c : sv)
+      for (size_t i = 0; i < N - 1; i++)
       {
-        append_char(c);
+        append_char(s[i]);
       }
     }
 
@@ -305,12 +226,42 @@ namespace snmalloc
 #endif
 
     /**
+     * Append a nullptr
+     */
+    void append(std::nullptr_t)
+    {
+      append("(nullptr)");
+    }
+
+    /**
      * Append a raw pointer to the buffer as a hex string.
      */
     void append(void* ptr)
     {
+      if (ptr == nullptr)
+      {
+        append(nullptr);
+        return;
+      }
       append(static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(ptr)));
       // TODO: CHERI bits.
+    }
+
+    /**
+     * Append a literal pointer.
+     */
+    void append(const char* ptr)
+    {
+      if (ptr == nullptr)
+      {
+        append(nullptr);
+        return;
+      }
+
+      while (char data = *ptr++)
+      {
+        append_char(data);
+      }
     }
 
     /**

@@ -40,7 +40,7 @@ To address this, we analysed what was doing while holding the lock.
 We found that we were doing a several things that were causing more time to be spent inside the lock than was necessary.
 Overall, we improve the start-up time of `snmalloc` in high thread scenarios as follows:
 
-We have a particularly tough benchmark for testing [startup time](../src/test/perf/startup/startup.cc).
+We have a particularly tough benchmark for testing [startup time](../../../src/test/perf/startup/startup.cc).
 We used a machine with 72 hardware threads.
 The benchmark causes all the threads to synchronise on starting their first allocation.
 This means all 72 threads are contending on the lock at the same time to get their allocator initialised.
@@ -62,7 +62,7 @@ The rest of this section details some improvements to get those results.
 
 The most interesting feature was the combining lock.
 This uses ideas from the Flat Combining work to provide a C++ lock that can be used to reduce the number of cache misses during lock contention.
-You can read more about that in [combininglock.md](../combininglock.md).
+You can read more about that in [combininglock.md](../../combininglock.md).
 
 ### DO_DUMP and DONT_DUMP
 
@@ -121,7 +121,7 @@ It does not increase the size of the pagemap.
 
 We have built a simple example inspired by Google's `miracle_ptr`,
 that uses this feature to provide the reference counting for all allocations, but out-of-band.
-See [miracle_ptr](../src/test/func/miracle_ptr/miracle_ptr.cc) for our current experiment.
+See [miracle_ptr](../../../src/test/func/miracle_ptr/miracle_ptr.cc) for our current experiment.
 We are still experimenting with this feature, and would love to hear your feedback.
 
 ## Conclusion

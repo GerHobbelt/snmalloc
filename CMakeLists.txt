@@ -293,11 +293,9 @@ if(${Backtrace_FOUND})
     $<${ci_or_debug}:${Backtrace_INCLUDE_DIRS}>)
 endif()
 
-if(MSVC)
-  target_compile_definitions(snmalloc INTERFACE -D_HAS_EXCEPTIONS=0)
-else()
-  # All symbols are always dynamic on haiku and -rdynamic is redundant (and unsupported).
-  if (NOT CMAKE_SYSTEM_NAME STREQUAL "Haiku")
+if(NOT MSVC)
+  check_linker_flag(CXX "-rdynamic" SNMALLOC_LINKER_SUPPORT_RDYNAMIC)
+  if (SNMALLOC_LINKER_SUPPORT_RDYNAMIC)
     # Get better stack traces in CI and debug builds.
     target_link_options(snmalloc INTERFACE $<${ci_or_debug}:-rdynamic>)
   endif()
@@ -428,6 +426,10 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
     target_link_libraries(${name} snmalloc)
     set_target_properties(${name} PROPERTIES CXX_VISIBILITY_PRESET hidden INTERPROCEDURAL_OPTIMIZATION ${SNMALLOC_COMPILER_SUPPORT_IPO})
     target_compile_definitions(${name} PRIVATE "SNMALLOC_USE_${SNMALLOC_CLEANUP}")
+
+    if(MSVC)
+      target_compile_definitions(${name} INTERFACE -D_HAS_EXCEPTIONS=0)
+    endif()
 
     add_warning_flags(${name})
     if(NOT MSVC)
