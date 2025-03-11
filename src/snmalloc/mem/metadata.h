@@ -3,6 +3,7 @@
 #include "../ds/ds.h"
 #include "freelist.h"
 #include "sizeclasstable.h"
+#include "snmalloc/stl/new.h"
 
 namespace snmalloc
 {
@@ -466,7 +467,7 @@ namespace snmalloc
 
       large_ = false;
 
-      new (&client_meta_)
+      new (&client_meta_, placement_token)
         typename ClientMeta::StorageType[get_client_storage_count(sizeclass)];
     }
 
@@ -486,7 +487,7 @@ namespace snmalloc
       // Jump to slow path on first deallocation.
       needed() = 1;
 
-      new (&client_meta_) typename ClientMeta::StorageType();
+      new (&client_meta_, placement_token) typename ClientMeta::StorageType();
     }
 
     /**
@@ -619,7 +620,7 @@ namespace snmalloc
      * available objects for this slab metadata.
      */
     template<typename Domesticator>
-    static SNMALLOC_FAST_PATH std::pair<freelist::HeadPtr, bool>
+    static SNMALLOC_FAST_PATH stl::Pair<freelist::HeadPtr, bool>
     alloc_free_list(
       Domesticator domesticate,
       FrontendSlabMetadata* meta,

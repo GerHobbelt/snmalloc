@@ -5,22 +5,23 @@
 #if defined(SNMALLOC_BACKTRACE_HEADER)
 #  include SNMALLOC_BACKTRACE_HEADER
 #endif
-#include <cstdlib>
+#include "snmalloc/stl/array.h"
+#include "snmalloc/stl/utility.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/mman.h>
 #include <sys/uio.h>
 #include <unistd.h>
-#include <utility>
+
 #if __has_include(<sys/random.h>)
 #  include <sys/random.h>
 #endif
-
-extern "C" int puts(const char* str);
 
 namespace snmalloc
 {
@@ -215,7 +216,7 @@ namespace snmalloc
       {
         // Fill memory so that when we switch the pages back on we don't make
         // assumptions on the content.
-        if constexpr (DEBUG)
+        if constexpr (Debug)
           memset(p, 0x5a, size);
 
         mprotect(p, size, PROT_NONE);
@@ -415,8 +416,8 @@ namespace snmalloc
       auto fd = open("/dev/urandom", flags, 0);
       if (fd > 0)
       {
-        auto current = std::begin(buffer);
-        auto target = std::end(buffer);
+        auto current = stl::begin(buffer);
+        auto target = stl::end(buffer);
         while (auto length = static_cast<size_t>(target - current))
         {
           ret = read(fd, current, length);

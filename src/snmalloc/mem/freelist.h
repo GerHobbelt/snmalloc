@@ -35,8 +35,9 @@
 
 #include "../ds/ds.h"
 #include "entropy.h"
+#include "snmalloc/stl/new.h"
 
-#include <cstdint>
+#include <stdint.h>
 
 namespace snmalloc
 {
@@ -265,7 +266,7 @@ namespace snmalloc
       static BHeadPtr<BView, BQueue> make(CapPtr<void, BView> p)
       {
         return CapPtr<Object::T<BQueue>, BView>::unsafe_from(
-          new (p.unsafe_ptr()) Object::T());
+          new (p.unsafe_ptr(), placement_token) Object::T());
       }
 
       /**
@@ -700,11 +701,11 @@ namespace snmalloc
        */
 
       // Pointer to the first element.
-      std::array<void*, LENGTH> head{nullptr};
+      stl::Array<void*, LENGTH> head{nullptr};
       // Pointer to the reference to the last element.
       // In the empty case end[i] == &head[i]
       // This enables branch free enqueuing.
-      std::array<void**, LENGTH> end{nullptr};
+      stl::Array<void**, LENGTH> end{nullptr};
 
       [[nodiscard]] Object::BQueuePtr<BQueue>* cast_end(uint32_t ix) const
       {
@@ -723,7 +724,7 @@ namespace snmalloc
       }
 
       SNMALLOC_NO_UNIQUE_ADDRESS
-      std::array<uint16_t, RANDOM ? 2 : (TRACK_LENGTH ? 1 : 0)> length{};
+      stl::Array<uint16_t, RANDOM ? 2 : (TRACK_LENGTH ? 1 : 0)> length{};
 
     public:
       constexpr Builder() = default;
@@ -905,7 +906,7 @@ namespace snmalloc
       template<bool RANDOM_ = RANDOM>
       stl::enable_if_t<
         !RANDOM_,
-        std::pair<
+        stl::Pair<
           Object::BHeadPtr<BView, BQueue>,
           Object::BHeadPtr<BView, BQueue>>>
       extract_segment(const FreeListKey& key, address_t key_tweak)

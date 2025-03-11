@@ -3,6 +3,7 @@
 #if defined(__linux__)
 #  include "../ds_core/ds_core.h"
 #  include "pal_posix.h"
+#  include "snmalloc/stl/array.h"
 
 #  include <string.h>
 #  include <sys/mman.h>
@@ -18,7 +19,7 @@
 #    include <linux/futex.h>
 #  endif
 
-extern "C" int puts(const char* str);
+#  include <stdio.h>
 
 namespace snmalloc
 {
@@ -130,7 +131,7 @@ namespace snmalloc
 
       // Fill memory so that when we switch the pages back on we don't make
       // assumptions on the content.
-      if constexpr (DEBUG)
+      if constexpr (Debug)
         memset(p, 0x5a, size);
 
       madvise(p, size, madvise_free_flags);
@@ -183,8 +184,8 @@ namespace snmalloc
       // protected routine.
       if (false == syscall_not_working.load(stl::memory_order_relaxed))
       {
-        auto current = std::begin(buffer);
-        auto target = std::end(buffer);
+        auto current = stl::begin(buffer);
+        auto target = stl::end(buffer);
         while (auto length = target - current)
         {
           // Reading data via syscall from system entropy pool.

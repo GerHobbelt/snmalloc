@@ -16,8 +16,9 @@
 #    define SNMALLOC_TICK_USE_CLOCK_GETTIME
 #  endif
 #endif
-#include <cstdint>
-#include <utility>
+#include "snmalloc/stl/utility.h"
+
+#include <stdint.h>
 
 #ifndef SNMALLOC_TICK_USE_CLOCK_GETTIME
 #  include <chrono>

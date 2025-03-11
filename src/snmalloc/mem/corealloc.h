@@ -6,6 +6,7 @@
 #include "pool.h"
 #include "remotecache.h"
 #include "sizeclasstable.h"
+#include "snmalloc/stl/new.h"
 #include "ticker.h"
 
 namespace snmalloc
@@ -221,7 +222,7 @@ namespace snmalloc
                pointer_offset(curr, rsize).template as_static<PreAllocObject>())
         {
           size_t insert_index = entropy.sample(count);
-          curr->next = std::exchange(
+          curr->next = stl::exchange(
             pointer_offset(bumpptr, insert_index * rsize)
               .template as_static<PreAllocObject>()
               ->next,
@@ -1128,7 +1129,8 @@ namespace snmalloc
       capptr::Alloc<void> spare_start = pointer_offset(raw, round_sizeof);
       Range<capptr::bounds::Alloc> r{spare_start, spare};
 
-      auto p = capptr::Alloc<CA>::unsafe_from(new (raw.unsafe_ptr()) CA(r));
+      auto p = capptr::Alloc<CA>::unsafe_from(
+        new (raw.unsafe_ptr(), placement_token) CA(r));
 
       // Remove excess from the bounds.
       p = Aal::capptr_bound<CA, capptr::bounds::Alloc>(p, round_sizeof);

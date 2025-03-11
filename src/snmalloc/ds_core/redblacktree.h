@@ -1,8 +1,9 @@
 #pragma once
 
-#include <array>
-#include <cstddef>
-#include <cstdint>
+#include "snmalloc/stl/array.h"
+
+#include <stddef.h>
+#include <stdint.h>
 
 namespace snmalloc
 {
@@ -86,7 +87,7 @@ namespace snmalloc
    */
   template<
     SNMALLOC_CONCEPT(RBRep) Rep,
-    bool run_checks = DEBUG,
+    bool run_checks = Debug,
     bool TRACE = false>
   class RBTree
   {
@@ -259,7 +260,7 @@ namespace snmalloc
     {
       friend class RBTree;
 
-      std::array<RBStep, 128> path;
+      stl::Array<RBStep, 128> path;
       size_t length = 0;
 
       RBPath(typename Rep::Handle root)
