@@ -21,7 +21,7 @@ namespace snmalloc
   template<typename PAL>
   concept IsPAL_static_features =
     requires() {
-      typename std::integral_constant<uint64_t, PAL::pal_features>;
+      typename stl::integral_constant<uint64_t, PAL::pal_features>;
     };
 
   /**
@@ -30,8 +30,8 @@ namespace snmalloc
   template<typename PAL>
   concept IsPAL_static_sizes =
     requires() {
-      typename std::integral_constant<std::size_t, PAL::address_bits>;
-      typename std::integral_constant<std::size_t, PAL::page_size>;
+      typename stl::integral_constant<std::size_t, PAL::address_bits>;
+      typename stl::integral_constant<std::size_t, PAL::page_size>;
     };
 
   /**
@@ -67,19 +67,6 @@ namespace snmalloc
                              PAL::template zero<true>(vp, sz)
                              } noexcept -> ConceptSame<void>;
                          };
-
-  /**
-   * The Pal must provide a thread id for debugging.  It should not return
-   * the default value of ThreadIdentity, as that is used as not an tid in some
-   * places.
-   */
-  template<typename PAL>
-  concept IsPAL_tid =
-    requires() {
-      {
-        PAL::get_tid()
-        } noexcept -> ConceptSame<typename PAL::ThreadIdentity>;
-    };
 
   /**
    * Absent any feature flags, the PAL must support a crude primitive allocator
@@ -137,7 +124,6 @@ namespace snmalloc
     IsPAL_static_sizes<PAL> &&
     IsPAL_error<PAL> &&
     IsPAL_memops<PAL> &&
-    IsPAL_tid<PAL> &&
     (!pal_supports<Entropy, PAL> || IsPAL_get_entropy64<PAL>) &&
     (!pal_supports<LowMemoryNotification, PAL> || IsPAL_mem_low_notify<PAL>) &&
     (pal_supports<NoAllocation, PAL> ||
