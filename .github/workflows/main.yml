@@ -125,7 +125,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: "~/.cache/bazel"
-        key: bazel
+        key: bazel-${{ matrix.os }}-${{ matrix.build-type }}
     - run: bazel build -c opt //:snmalloc
     - run: bazel build -c opt //:snmalloc-rs
     - run: bazel test -c opt --config=asan //fuzzing:snmalloc_fuzzer
@@ -399,14 +399,14 @@ jobs:
     strategy:
       matrix:
         # Build each combination of OS and release/debug variants
-        os: [ windows-2019, windows-2022, windows-2025 ]
+        os: [ windows-2022, windows-2025 ]
         build-type: [ Release, Debug ]
         arch: [ Win32, x64 ]
         toolchain: [ "", "-T ClangCL" ]
         extra-cmake-flags: [ "" ]
         # Add an extra check for the Windows 8 compatible PAL
         include:
-          - os: windows-2019
+          - os: windows-2022
             build-type: Release
             arch: x64
             toolchain: ""
