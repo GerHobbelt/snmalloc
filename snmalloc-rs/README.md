@@ -1,11 +1,6 @@
 # snmalloc-rs
 
-**Notice: MinGW Build is broken and may not be fixed in a near future.
-See [this PR](https://github.com/microsoft/snmalloc/pull/217) in the upstream.**
-
-MSVC/MinGW/Linux/MacOS: [![Actions Status](https://github.com/schrodingerzhu/snmalloc-rs/workflows/Rust/badge.svg)](https://github.com/schrodingerzhu/snmalloc-rs/actions)
-
-FreeBSD: [![Build Status](https://api.cirrus-ci.com/github/SchrodingerZhu/snmalloc-rs.svg)](https://cirrus-ci.com/github/SchrodingerZhu/snmalloc-rs)
+[![snmalloc-rs CI](https://github.com/microsoft/snmalloc/actions/workflows/rust.yml/badge.svg)](https://github.com/microsoft/snmalloc/actions/workflows/rust.yml)
 
 `snmalloc-rs` provides a wrapper for [`microsoft/snmalloc`](https://github.com/microsoft/snmalloc) to make it usable as
 a global allocator for rust. snmalloc is a research allocator. Its key design features are:
@@ -16,22 +11,16 @@ a global allocator for rust. snmalloc is a research allocator. Its key design fe
 - The allocator uses large ranges of pages to reduce the amount of meta-data required.
 
 Some old benchmark results are available in
-the [`snmalloc` paper](https://github.com/microsoft/snmalloc/blob/master/snmalloc.pdf). Some recent benchmark results
-are listed at
-[bench_suite](https://github.com/SchrodingerZhu/bench_suite). There are three features defined in this crate:
+the [`snmalloc` paper](https://github.com/microsoft/snmalloc/blob/master/snmalloc.pdf). 
 
-- `debug`: Enable the `Debug` mode in `snmalloc`.
-- ~~`1mib`: Use the `1mib` chunk configuration. From `0.2.17`, this is set as a default feature~~ (removed since 0.3.0)
-- ~~`16mib`: Use the `16mib` chunk configuration.~~ (removed since 0.3.0)
-- ~~`cache-friendly`: Make the allocator more cache friendly (setting `CACHE_FRIENDLY_OFFSET` to `64` in building the
-  library).~~ (removed since 0.3.0)
+There are the following features defined in this crate:
+
+- `debug`: Enable the `Debug` mode in `snmalloc`. This is also automatically enabled if Cargo's `DEBUG` environment variable is set to `true`.
 - `native-cpu`: Optimize `snmalloc` for the native CPU of the host machine. (this is not a default behavior
   since `0.2.14`)
 - `qemu`: Workaround `madvise` problem of QEMU environment
-- ~~`stats`: Enable statistics~~ (removed since 0.3.0)
 - `local_dynamic_tls`: Workaround cannot allocate memory in static tls block
 - `build_cc`: Use of cc crate instead of cmake (cmake still default) as builder (more platform agnostic)
-- ~~`usecxx20`: Enable C++20 standard if available~~ (removed since 0.3.0)
 - `usecxx17`: Use C++17 standard
 - `check`: Enable extra checks to improve security, see upstream [security docs](https://github.com/microsoft/snmalloc/tree/main/docs/security).
   Note that the `memcpy` protection is not enabled in Rust.
@@ -40,6 +29,25 @@ are listed at
 - `notls`: Enables to be loaded dynamically, thus disable tls.
 - `stats`: Enables allocation statistics.
 - `libc-api`: Enables libc API backed by snmalloc.
+- `usewait-on-address`: Enable `WaitOnAddress` support on Windows (enabled by default).
+- `tracing`: Enable structured tracing/logging.
+- `fuzzing`: Enable fuzzing support.
+- `vendored-stl`: Use self-vendored STL.
+- `check-loads`: Enable check loads feature.
+- `pageid`: Enable page ID feature.
+- `gwp-asan`: Enable GWP-ASan integration. Requires `SNMALLOC_GWP_ASAN_INCLUDE_PATH` and `SNMALLOC_GWP_ASAN_LIBRARY_PATH`.
+
+## Build Configuration
+
+The build script ensures architectural alignment between the Rust profile and the underlying `snmalloc` allocator:
+
+### Environment Variables
+The following environment variables are automatically detected and propagated:
+- `DEBUG`: Synchronizes the `snmalloc` build type with the Cargo profile. If `true`, `snmalloc` is built in `Debug` mode.
+- `OPT_LEVEL`: Propagated to the C++ compiler to ensure optimization parity between Rust and C++ components.
+
+### Windows CRT Consistency
+On Windows, the build script enforces static CRT linking (`/MT` or `/MTd`) across both `cc` and `cmake` builders. This prevents linker errors and ensures consistency when `snmalloc` is used as a global allocator.
 
 **To get the crates compiled, you need to choose either `1mib` or `16mib` to determine the chunk configuration**
 
@@ -58,19 +66,6 @@ To set `SnMalloc` as the global allocator add this to your project:
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 ```
 
-## For MinGW Users
-
-`mingw` version is only tested on nightly branch with MSYS environment. We are using dynamic linking method. Hence,
-please make sure the following libs are in your `PATH`:
-
-- `winpthread`
-- `atomic`
-- `stdc++`
-- `gcc_s`
-
-**Notice:** since version `0.2.12`, we no longer require you to provide additional environment variables for `mingw`
-target.
-
 ## For Android Cross-Compilation
 
 - `ANDROID_NDK` must be provided as an environment variable
@@ -81,6 +76,11 @@ target.
   default)~~ (`libstdc++` is no longer a dependency)
 
 ## Changelog
+
+### 0.7.4
+
+- Tracking upstream to match version 0.7.4.
+- SnMalloc has been moved to upstream repository. Future releases will track upstream release directly.
 
 ### 0.3.8
 
