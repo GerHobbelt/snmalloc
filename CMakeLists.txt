@@ -31,6 +31,7 @@ option(SNMALLOC_ENABLE_WAIT_ON_ADDRESS "Use wait on address backoff strategy if 
 option(SNMALLOC_PTHREAD_FORK_PROTECTION "Guard against forking while allocator locks are held using pthread_atfork hooks" OFF)
 option(SNMALLOC_ENABLE_FUZZING "Enable fuzzing instrumentation tests" OFF)
 option(SNMALLOC_USE_SELF_VENDORED_STL "Avoid using system STL" OFF)
+option(SNMALLOC_COVERAGE "Build with clang source-based coverage instrumentation" OFF)
 # Options that apply only if we're not building the header-only library
 cmake_dependent_option(SNMALLOC_RUST_SUPPORT "Build static library for rust" OFF "NOT SNMALLOC_HEADER_ONLY_LIBRARY" OFF)
 cmake_dependent_option(SNMALLOC_RUST_LIBC_API "Include libc API in the rust library" OFF "SNMALLOC_RUST_SUPPORT" OFF)
@@ -80,6 +81,19 @@ set(SNMALLOC_PAGESIZE "" CACHE STRING "Page size in bytes")
 
 set(SNMALLOC_DEALLOC_BATCH_RING_ASSOC "" CACHE STRING "Associativity of deallocation batch cache; 0 to disable")
 set(SNMALLOC_DEALLOC_BATCH_RING_SET_BITS "" CACHE STRING "Logarithm of number of deallocation batch cache associativity sets")
+
+# Coverage instrumentation. Clang source-based coverage only; gcov
+# format is not consumed by the diff pipeline.
+if (SNMALLOC_COVERAGE)
+  if (NOT (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+           CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang"))
+    message(FATAL_ERROR
+      "SNMALLOC_COVERAGE requires Clang or AppleClang (got ${CMAKE_CXX_COMPILER_ID}). "
+      "Point CMAKE_CXX_COMPILER at clang++ for the coverage build directory.")
+  endif()
+  add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+  add_link_options(-fprofile-instr-generate -fcoverage-mapping)
+endif()
 
 if(MSVC AND SNMALLOC_STATIC_LIBRARY AND (SNMALLOC_STATIC_LIBRARY_PREFIX STREQUAL ""))
   message(FATAL_ERROR "Empty static library prefix not supported on MSVC")
@@ -430,8 +444,10 @@ endif()
 if(NOT MSVC)
   check_linker_flag(CXX "-rdynamic" SNMALLOC_LINKER_SUPPORT_RDYNAMIC)
   if (SNMALLOC_LINKER_SUPPORT_RDYNAMIC)
-    # Get better stack traces in CI and debug builds.
-    target_link_options(snmalloc INTERFACE $<${ci_or_debug}:-rdynamic>)
+    # Export all symbols from executables so that statically linked operator
+    # new/delete and malloc/free overrides are visible to shared libraries
+    # (e.g. libstdc++) that call through PLT. Also gives better stack traces.
+    target_link_options(snmalloc INTERFACE -rdynamic)
   endif()
 endif()
 
@@ -479,6 +495,16 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
     set(TEST_CLEANUP ${SNMALLOC_CLEANUP})
   endif()
 
+  # Tests that only include snmalloc_testlib.h (no snmalloc.h or snmalloc_core.h).
+  # These are mitigation-independent and can be compiled once, then linked
+  # against both fast and check testlib variants.
+  set(TESTLIB_ONLY_TESTS
+    bits first_operation memory memory_usage multi_atexit multi_threadatexit
+    redblack statistics teardown
+    contention external_pointer large_alloc lotsofthreads post_teardown
+    singlethread startup
+  )
+
   function(make_tests TAG DEFINES)
     foreach(TEST_CATEGORY ${TEST_CATEGORIES})
       message(VERBOSE "Adding ${TAG}/${TEST_CATEGORY} tests")
@@ -488,7 +514,36 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
         aux_source_directory(${TESTDIR}/${TEST_CATEGORY}/${TEST} SRC)
         set(TESTNAME "${TEST_CATEGORY}-${TEST}-${TAG}")
 
-        add_executable(${TESTNAME} ${SRC})
+        # Check if this test is testlib-only (mitigation-independent).
+        # If so, compile the source once into an object library and reuse
+        # across flavours.
+        list(FIND TESTLIB_ONLY_TESTS ${TEST} _testlib_only_idx)
+        set(OBJLIBNAME "${TEST_CATEGORY}-${TEST}-obj")
+        if (NOT ${_testlib_only_idx} EQUAL -1 AND NOT TARGET ${OBJLIBNAME})
+          # First flavour to see this test creates the object library.
+          add_library(${OBJLIBNAME} OBJECT ${SRC})
+          target_link_libraries(${OBJLIBNAME} snmalloc)
+          target_compile_definitions(${OBJLIBNAME} PRIVATE "SNMALLOC_USE_${TEST_CLEANUP}")
+          add_warning_flags(${OBJLIBNAME})
+          if(SNMALLOC_SANITIZER)
+            target_compile_options(${OBJLIBNAME} PRIVATE -g -fsanitize=${SNMALLOC_SANITIZER} -fno-omit-frame-pointer)
+            if (${SNMALLOC_SANITIZER} MATCHES "thread")
+              target_compile_definitions(${OBJLIBNAME} PRIVATE SNMALLOC_THREAD_SANITIZER_ENABLED)
+            endif()
+          endif()
+        endif()
+
+        if (NOT ${_testlib_only_idx} EQUAL -1)
+          # Testlib-only: link the shared object library against this
+          # flavour's testlib.
+          add_executable(${TESTNAME} $<TARGET_OBJECTS:${OBJLIBNAME}>)
+        else()
+          add_executable(${TESTNAME} ${SRC})
+        endif()
+
+        # Track every test binary in a global property so the `coverage`
+        # custom target can pass them all to llvm-cov without globbing.
+        set_property(GLOBAL APPEND PROPERTY SNMALLOC_TEST_BINARIES ${TESTNAME})
 
         if(SNMALLOC_SANITIZER)
           target_compile_options(${TESTNAME} PRIVATE -g -fsanitize=${SNMALLOC_SANITIZER} -fno-omit-frame-pointer)
@@ -501,6 +556,10 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
         add_warning_flags(${TESTNAME})
 
         target_link_libraries(${TESTNAME} snmalloc)
+        # Link the pre-compiled test library into all tests.  For tests
+        # that include snmalloc.h directly the linker will simply discard
+        # the duplicate inline definitions (ODR-safe).
+        target_link_libraries(${TESTNAME} snmalloc-testlib-${TAG})
         target_compile_definitions(${TESTNAME} PRIVATE "SNMALLOC_USE_${TEST_CLEANUP}")
         
         if (NOT DEFINES STREQUAL " ")
@@ -517,6 +576,12 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
         if (${TEST_CATEGORY} MATCHES "perf")
           message(VERBOSE "Single threaded test: ${TESTNAME}")
           set_tests_properties(${TESTNAME} PROPERTIES PROCESSORS 4)
+        endif()
+        if (SNMALLOC_COVERAGE)
+          # Per-test LLVM_PROFILE_FILE so cached coverage runs can
+          # invalidate one test's profiles without touching the rest.
+          set_tests_properties(${TESTNAME} PROPERTIES ENVIRONMENT
+            "LLVM_PROFILE_FILE=${CMAKE_BINARY_DIR}/profiles/${TESTNAME}/%p-%m.profraw")
         endif()
         if(WIN32)
           # On Windows these tests use a lot of memory as it doesn't support
@@ -536,6 +601,24 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
         endif()
       endforeach()
     endforeach()
+  endfunction()
+
+  function(build_test_library TAG DEFINES)
+    set(LIBNAME snmalloc-testlib-${TAG})
+    add_library(${LIBNAME} STATIC src/test/snmalloc_testlib.cc)
+    target_link_libraries(${LIBNAME} PRIVATE snmalloc)
+    set_target_properties(${LIBNAME} PROPERTIES INTERFACE_LINK_LIBRARIES "")
+    target_compile_definitions(${LIBNAME} PRIVATE "SNMALLOC_USE_${TEST_CLEANUP}")
+    if (NOT DEFINES STREQUAL " ")
+      target_compile_definitions(${LIBNAME} PRIVATE ${DEFINES})
+    endif()
+    if(SNMALLOC_SANITIZER)
+      target_compile_options(${LIBNAME} PRIVATE -g -fsanitize=${SNMALLOC_SANITIZER} -fno-omit-frame-pointer)
+      if (${SNMALLOC_SANITIZER} MATCHES "thread")
+        target_compile_definitions(${LIBNAME} PRIVATE SNMALLOC_THREAD_SANITIZER_ENABLED)
+      endif()
+    endif()
+    add_warning_flags(${LIBNAME})
   endfunction()
 
   if(NOT (DEFINED SNMALLOC_LINKER_FLAVOUR) OR ("${SNMALLOC_LINKER_FLAVOUR}" MATCHES "^$"))
@@ -680,6 +763,7 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
         set(DEFINES " ")
       endif()
 
+      build_test_library(${FLAVOUR} ${DEFINES})
       make_tests(${FLAVOUR} ${DEFINES})
     endforeach()
   endif()
@@ -728,6 +812,70 @@ if(NOT SNMALLOC_HEADER_ONLY_LIBRARY)
   if (SNMALLOC_BUILD_TESTING)
     clangformat_targets()
   endif ()
+
+  # Coverage target. Generates a unified coverage.profdata +
+  # coverage.json for all test binaries.
+  if (SNMALLOC_COVERAGE AND SNMALLOC_BUILD_TESTING)
+    find_program(LLVM_PROFDATA NAMES llvm-profdata-19 llvm-profdata-15 llvm-profdata)
+    find_program(LLVM_COV      NAMES llvm-cov-19      llvm-cov-15      llvm-cov)
+    if (LLVM_PROFDATA STREQUAL "LLVM_PROFDATA-NOTFOUND" OR
+        LLVM_COV      STREQUAL "LLVM_COV-NOTFOUND")
+      message(FATAL_ERROR
+        "SNMALLOC_COVERAGE requires llvm-profdata and llvm-cov on PATH.")
+    endif()
+
+    get_property(_test_binaries GLOBAL PROPERTY SNMALLOC_TEST_BINARIES)
+    if (NOT _test_binaries)
+      message(FATAL_ERROR "SNMALLOC_TEST_BINARIES is empty; nothing to cover.")
+    endif()
+
+    # Build the -object argument list: first binary positional, rest with
+    # -object prefix per llvm-cov's CLI. CMake list joined with spaces so
+    # the resulting string can be embedded in `sh -c "..."` commands.
+    set(_cov_objects "")
+    set(_first TRUE)
+    foreach(_b ${_test_binaries})
+      if (_first)
+        string(APPEND _cov_objects " $<TARGET_FILE:${_b}>")
+        set(_first FALSE)
+      else()
+        string(APPEND _cov_objects " -object $<TARGET_FILE:${_b}>")
+      endif()
+    endforeach()
+
+    # Build "<name>\t<path>" pairs for the per-test cache loop.
+    set(_cov_test_pairs "")
+    foreach(_b ${_test_binaries})
+      string(APPEND _cov_test_pairs "${_b}\t$<TARGET_FILE:${_b}>\n")
+    endforeach()
+
+    set(_cov_profile_dir ${CMAKE_BINARY_DIR}/profiles)
+    set(_cov_profdata    ${CMAKE_BINARY_DIR}/coverage.profdata)
+    set(_cov_json        ${CMAKE_BINARY_DIR}/coverage.json)
+    set(_cov_report      ${CMAKE_BINARY_DIR}/coverage.report.txt)
+    set(_cov_pairs_file  ${CMAKE_BINARY_DIR}/coverage_tests.tsv)
+    set(_cov_runner      ${CMAKE_SOURCE_DIR}/cmake/run_coverage.cmake)
+
+    file(GENERATE OUTPUT ${_cov_pairs_file} CONTENT "${_cov_test_pairs}")
+
+    add_custom_target(coverage
+      COMMAND ${CMAKE_COMMAND}
+        -DPROFROOT=${_cov_profile_dir}
+        -DPAIRS=${_cov_pairs_file}
+        -DCTEST=${CMAKE_CTEST_COMMAND}
+        -DLLVM_PROFDATA=${LLVM_PROFDATA}
+        -DLLVM_COV=${LLVM_COV}
+        "-DCOV_OBJECTS=${_cov_objects}"
+        -DCOV_PROFDATA=${_cov_profdata}
+        -DCOV_JSON=${_cov_json}
+        -DCOV_REPORT=${_cov_report}
+        -DCTEST_JOBS=8
+        -P ${_cov_runner}
+      DEPENDS ${_test_binaries} ${_cov_runner}
+      WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+      USES_TERMINAL
+      COMMENT "Running ctest under LLVM coverage (cached) and exporting JSON")
+  endif()
 endif()
 
 install(TARGETS snmalloc EXPORT snmallocConfig)
@@ -743,6 +891,7 @@ install(DIRECTORY src/snmalloc/ds_aal DESTINATION include/snmalloc)
 install(DIRECTORY src/snmalloc/ds_core DESTINATION include/snmalloc)
 install(DIRECTORY src/snmalloc/global DESTINATION include/snmalloc)
 install(DIRECTORY src/snmalloc/mem DESTINATION include/snmalloc)
+install(DIRECTORY src/snmalloc/mitigations DESTINATION include/snmalloc)
 install(DIRECTORY src/snmalloc/override DESTINATION include/snmalloc)
 install(DIRECTORY src/snmalloc/pal DESTINATION include/snmalloc)
 install(DIRECTORY src/snmalloc/stl DESTINATION include/snmalloc)
